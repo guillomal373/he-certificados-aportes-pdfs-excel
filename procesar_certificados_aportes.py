@@ -150,14 +150,12 @@ def normalize_admin_name(value: str) -> str:
 def crop_text(page) -> str:
     candidates = []
 
-    # 1) Texto completo sin recorte
     try:
         text_full = page.extract_text(x_tolerance=2, y_tolerance=3) or ""
         candidates.append(text_full)
     except Exception:
         pass
 
-    # 2) Recorte desde más abajo, como venías haciendo
     try:
         cropped1 = page.crop((0, 100, page.width, page.height - 20))
         text_c1 = cropped1.extract_text(x_tolerance=2, y_tolerance=3) or ""
@@ -165,7 +163,6 @@ def crop_text(page) -> str:
     except Exception:
         pass
 
-    # 3) Recorte un poco más conservador
     try:
         cropped2 = page.crop((0, 60, page.width, page.height - 20))
         text_c2 = cropped2.extract_text(x_tolerance=2, y_tolerance=3) or ""
@@ -173,7 +170,6 @@ def crop_text(page) -> str:
     except Exception:
         pass
 
-    # 4) Intento con palabras individuales reconstruidas
     try:
         words = page.extract_words(x_tolerance=2, y_tolerance=3, keep_blank_chars=False)
         text_words = " ".join(w["text"] for w in words)
@@ -181,19 +177,42 @@ def crop_text(page) -> str:
     except Exception:
         pass
 
-    # Normalizar espacios
     normalized = [clean_spaces(t) for t in candidates if t and t.strip()]
 
-    # Priorizar el texto que sí contenga el encabezado real
     for text in normalized:
         if "Se certifica que" in text:
             return text[text.find("Se certifica que"):]
 
-    # Si ninguno trae el encabezado, devolver el más largo para debug
     if normalized:
         return max(normalized, key=len)
 
     return ""
+
+
+def extract_full_text(pdf) -> str:
+    page_texts = []
+
+    for i, page in enumerate(pdf.pages):
+        text = crop_text(page)
+        if text:
+            page_texts.append(text)
+
+    full_text = clean_spaces(" ".join(page_texts))
+    return full_text
+
+
+def extract_tables_from_all_pages(pdf):
+    all_tables = []
+
+    for page in pdf.pages:
+        try:
+            tables = page.extract_tables()
+            if tables:
+                all_tables.extend(tables)
+        except Exception:
+            pass
+
+    return all_tables
 
 
 def extract_last_identity(full_text: str) -> Tuple[str, str, int]:
@@ -224,10 +243,10 @@ def get_section(full_text: str, start: str, end: str | None) -> str:
     return full_text[start_idx:end_idx]
 
 
-def extract_tables(page):
-    tables = page.extract_tables()
+def extract_tables(pdf):
+    tables = extract_tables_from_all_pages(pdf)
     if len(tables) < 4:
-        raise ValueError(f"Se esperaban al menos 4 tablas y se encontraron {len(tables)}.")
+        raise ValueError(f"Se esperaban al menos 4 tablas en total y se encontraron {len(tables)}.")
     return tables
 
 
@@ -353,10 +372,19 @@ def parse_novedades_from_table(
     fecha_generacion: datetime,
 ) -> List[List]:
     rows = []
+
+    if not table or len(table) < 3:
+        return rows
+
     data_rows = table[2:]
 
     for row in data_rows:
-        if not row or len(row) < 17:
+        if not row:
+            continue
+
+        row = [(cell or "").strip() for cell in row]
+
+        if len(row) < 17:
             continue
 
         periodo_match = re.search(r"\d{4}/\d{2}", row[0] or "")
@@ -369,6 +397,9 @@ def parse_novedades_from_table(
         tipo_planilla = tipo_match.group(0)
 
         for idx, codigo in enumerate(NOVEDADES_CODIGOS, start=2):
+            if idx >= len(row):
+                continue
+
             cell_value = clean_spaces((row[idx] or "").upper())
             if "X" in cell_value:
                 rows.append([
@@ -388,21 +419,35 @@ def parse_novedades_from_table(
 
 def process_pdf(pdf_path: Path) -> Dict[str, List[List]]:
     with pdfplumber.open(pdf_path) as pdf:
-        page = pdf.pages[0]
-        full_text = crop_text(page)
+        full_text = extract_full_text(pdf)
         print(f"DEBUG TEXTO {pdf_path.name}:")
         print(full_text[:800])
         print("-" * 80)
-        tables = extract_tables(page)
+
+        tables = extract_tables(pdf)
 
     nombre, tipo_id, numero_id = extract_last_identity(full_text)
     fecha_generacion = extract_generation_date(full_text)
 
-    section_liq = get_section(full_text, "Datos de las Liquidaciones Pagadas", "Aportes Sistema de Seguridad Social")
-    section_seg = get_section(full_text, "Aportes Sistema de Seguridad Social", "Aportes Parafiscales")
-    section_par = get_section(full_text, "Aportes Parafiscales", "Novedades")
+    section_liq = get_section(
+        full_text,
+        "Datos de las Liquidaciones Pagadas",
+        "Aportes Sistema de Seguridad Social",
+    )
+    section_seg = get_section(
+        full_text,
+        "Aportes Sistema de Seguridad Social",
+        "Aportes Parafiscales",
+    )
+    section_par = get_section(
+        full_text,
+        "Aportes Parafiscales",
+        "Novedades",
+    )
 
-    return {
+    novedades_table = tables[-1]
+
+    data = {
         "Liquidaciones Pagadas": parse_liquidaciones(
             section_liq, pdf_path.name, nombre, tipo_id, numero_id, fecha_generacion
         ),
@@ -413,9 +458,11 @@ def process_pdf(pdf_path: Path) -> Dict[str, List[List]]:
             section_par, pdf_path.name, nombre, tipo_id, numero_id, fecha_generacion
         ),
         "Novedades": parse_novedades_from_table(
-            tables[3], pdf_path.name, nombre, tipo_id, numero_id, fecha_generacion
+            novedades_table, pdf_path.name, nombre, tipo_id, numero_id, fecha_generacion
         ),
     }
+
+    return data
 
 
 def build_workbook() -> Workbook:
@@ -488,14 +535,20 @@ def main() -> None:
 
     consolidated = {sheet_name: [] for sheet_name in SHEET_COLUMNS}
 
+    ok_files = []
+    error_files = []
+
     print(f"Procesando {len(pdf_files)} archivos PDF...")
+
     for pdf_path in pdf_files:
         try:
             data = process_pdf(pdf_path)
             for sheet_name, rows in data.items():
                 consolidated[sheet_name].extend(rows)
+            ok_files.append(pdf_path.name)
             print(f"OK  - {pdf_path.name}")
         except Exception as exc:
+            error_files.append((pdf_path.name, str(exc)))
             print(f"ERROR - {pdf_path.name}: {exc}")
 
     wb = build_workbook()
@@ -508,7 +561,24 @@ def main() -> None:
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_file)
-    print(f"\\nExcel generado en: {output_file}")
+
+    print("\n" + "=" * 80)
+    print("RESUMEN FINAL")
+    print("=" * 80)
+    print(f"Total de PDFs encontrados : {len(pdf_files)}")
+    print(f"Procesados OK             : {len(ok_files)}")
+    print(f"Con error                 : {len(error_files)}")
+    print(f"Excel generado en         : {output_file}")
+
+    if ok_files:
+        print("\nArchivos OK:")
+        for name in ok_files:
+            print(f"  - {name}")
+
+    if error_files:
+        print("\nArchivos con ERROR:")
+        for name, err in error_files:
+            print(f"  - {name}: {err}")
 
 
 if __name__ == "__main__":
