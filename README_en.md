@@ -1,3 +1,6 @@
+> [!TIP]
+> Created by Guillermo Malagon on April 8, 2026.
+
 # README - Processing Contribution Certificates on macOS
 
 > **Created by Guillermo Malagon on April 8, 2026.**
