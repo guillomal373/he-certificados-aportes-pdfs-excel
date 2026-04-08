@@ -1,0 +1,5 @@
+# Carpeta con PDFs u otros archivos de trabajo
+pdfs/
+
+# Excel de salida
+salida.xlsx
