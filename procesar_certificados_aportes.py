@@ -92,12 +92,12 @@ NOVEDADES_CODIGOS = [
 ]
 
 SECURITY_PATTERN = re.compile(
-    r"(\d{4}/\d{2})\s+([A-Z])\s+([A-Z ]+?)\s+(\d+)\s+\$([\d,]+)\s+\$([\d,]+)\s+\$([\d,]+)\s+\$([\d,]+)\s+"
-    r"([A-Z ]+?)\s+(\d+)\s+\$([\d,]+)\s+\$([\d,]+)\s+([A-Z ]+?)\s+(\d+)\s+\$([\d,]+)\s+\$([\d,]+)"
+    r"(\d{4}/\d{2})\s+([A-Z])\s+([A-Z0-9ÁÉÍÓÚÜÑ()./\- ]+?)\s+(\d+)\s+\$([\d,]+)\s+\$([\d,]+)\s+\$([\d,]+)\s+\$([\d,]+)\s+"
+    r"([A-Z0-9ÁÉÍÓÚÜÑ()./\- ]+?)\s+(\d+)\s+\$([\d,]+)\s+\$([\d,]+)\s+([A-Z0-9ÁÉÍÓÚÜÑ()./\- ]+?)\s+(\d+)\s+\$([\d,]+)\s+\$([\d,]+)"
 )
 
 PARAF_PATTERN = re.compile(
-    r"(\d{4}/\d{2})\s+([A-Z])\s+([A-Z ]+?)\s+(\d+)\s+\$([\d,]+)\s+\$([\d,]+)\s+\$([\d,]+)\s+"
+    r"(\d{4}/\d{2})\s+([A-Z])\s+([A-Z0-9ÁÉÍÓÚÜÑ()./\- ]+?)\s+(\d+)\s+\$([\d,]+)\s+\$([\d,]+)\s+\$([\d,]+)\s+"
     r"(\d+)%\s+\$([\d,]+)\s+(\d+)%\s+\$([\d,]+)\s+(\d+)%\s+\$([\d,]+)\s+(\d+)%\s+\$([\d,]+)"
 )
 
@@ -128,6 +128,40 @@ def parse_args() -> argparse.Namespace:
 def clean_spaces(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
+def normalize_security_section_text(text: str) -> str:
+    replacements = {
+        "EPS SURA (ANTES\nSUSALUD)": "EPS SURA (ANTES SUSALUD)",
+        "EPS SURA\n(ANTES SUSALUD)": "EPS SURA (ANTES SUSALUD)",
+        "EPS SURA(ANTES\nSUSALUD)": "EPS SURA (ANTES SUSALUD)",
+        "EPS SURA(ANTES SUSALUD)": "EPS SURA (ANTES SUSALUD)",
+        "EPSSURA(ANTES\nSUSALUD)": "EPS SURA (ANTES SUSALUD)",
+        "EPSSURA(ANTES SUSALUD)": "EPS SURA (ANTES SUSALUD)",
+        "EPSSURA(ANTES": "EPS SURA (ANTES",
+        "EPSSURA(ANTES": "EPS SURA (ANTES",
+        "COLPATRIA\nARP": "COLPATRIA ARP",
+        "COLPATRIAARP": "COLPATRIA ARP",
+        "ARL\nSURA": "ARL SURA",
+        "ARLSURA": "ARL SURA",
+        "SALUD\nTOTAL": "SALUD TOTAL",
+        "SALUDTOTAL": "SALUD TOTAL",
+    }
+
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+
+    return clean_spaces(text)
+
+def normalize_parafiscales_section_text(text: str) -> str:
+    replacements = {
+        "COLSUBSIDIO": "COLSUBSIDIO",
+        "COLSUBSIDIO\n": "COLSUBSIDIO ",
+        "CAFAM\n": "CAFAM ",
+    }
+
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+
+    return clean_spaces(text)
 
 def money_to_int(value: str) -> int:
     return int(re.sub(r"[^\d]", "", value))
@@ -139,12 +173,20 @@ def parse_date(value: str) -> datetime:
 
 def normalize_admin_name(value: str) -> str:
     raw = clean_spaces(value.upper())
-    replacements = {
-        "ARLSURA": "ARL SURA",
-        "COLPATRIAARP": "COLPATRIA ARP",
-        "SALUDTOTAL": "SALUD TOTAL",
-    }
-    return replacements.get(raw, raw)
+
+    raw = raw.replace("ARLSURA", "ARL SURA")
+    raw = raw.replace("COLPATRIAARP", "COLPATRIA ARP")
+    raw = raw.replace("SALUDTOTAL", "SALUD TOTAL")
+    raw = raw.replace("EPSSURA", "EPS SURA")
+    raw = raw.replace("EPSSURA", "EPS SURA")
+
+    raw = raw.replace("EPS SURA(ANTES SUSALUD)", "EPS SURA (ANTES SUSALUD)")
+    raw = raw.replace("EPS SURA(ANTES", "EPS SURA (ANTES")
+    raw = raw.replace("EPS SURA (ANTES", "EPS SURA (ANTES SUSALUD)")
+
+    raw = clean_spaces(raw)
+
+    return raw
 
 
 def crop_text(page) -> str:
@@ -245,10 +287,7 @@ def get_section(full_text: str, start: str, end: str | None) -> str:
 
 def extract_tables(pdf):
     tables = extract_tables_from_all_pages(pdf)
-    if len(tables) < 4:
-        raise ValueError(f"Se esperaban al menos 4 tablas en total y se encontraron {len(tables)}.")
     return tables
-
 
 def parse_liquidaciones(
     section_text: str,
@@ -275,7 +314,6 @@ def parse_liquidaciones(
         ])
     return rows
 
-
 def parse_seguridad_social(
     section_text: str,
     archivo_pdf: str,
@@ -285,13 +323,39 @@ def parse_seguridad_social(
     fecha_generacion: datetime,
 ) -> List[List]:
     rows = []
-    for match in SECURITY_PATTERN.findall(section_text):
+
+    print(f"DEBUG SEGURIDAD SOCIAL - ARCHIVO: {archivo_pdf}")
+
+    section_text = normalize_security_section_text(section_text)
+
+    # print("TEXTO NORMALIZADO SEGURIDAD SOCIAL:")
+    # print(section_text[:2000])
+    # print("-" * 80)
+
+    matches = SECURITY_PATTERN.findall(section_text)
+
+    print(f"TOTAL MATCHES SEGURIDAD SOCIAL: {len(matches)}")
+
+    if not matches:
+        # print(f"ERROR DEBUG - No hubo matches en Seguridad Social para {archivo_pdf}")
+        print("=" * 80)
+        return rows
+
+    for i, match in enumerate(matches, start=1):
+        # print(f"MATCH #{i}: {match}")
+
         (
             periodo_pension, tipo_planilla,
             afp_adm, afp_dias, afp_ibc, afp_fs, afp_fsp, afp_aporte,
             eps_adm, eps_dias, eps_ibc, eps_aporte,
             arl_adm, arl_dias, arl_ibc, arl_aporte,
         ) = match
+
+        afp_adm_norm = normalize_admin_name(afp_adm)
+        eps_adm_norm = normalize_admin_name(eps_adm)
+        arl_adm_norm = normalize_admin_name(arl_adm)
+
+        # print(f"DEBUG NORMALIZADO -> AFP:[{afp_adm_norm}] EPS:[{eps_adm_norm}] ARL:[{arl_adm_norm}]")
 
         rows.append([
             archivo_pdf,
@@ -300,24 +364,27 @@ def parse_seguridad_social(
             numero_id,
             periodo_pension,
             tipo_planilla,
-            normalize_admin_name(afp_adm),
+            afp_adm_norm,
             int(afp_dias),
             money_to_int(afp_ibc),
             money_to_int(afp_fs),
             money_to_int(afp_fsp),
             money_to_int(afp_aporte),
-            normalize_admin_name(eps_adm),
+            eps_adm_norm,
             int(eps_dias),
             money_to_int(eps_ibc),
             money_to_int(eps_aporte),
-            normalize_admin_name(arl_adm),
+            arl_adm_norm,
             int(arl_dias),
             money_to_int(arl_ibc),
             money_to_int(arl_aporte),
             fecha_generacion,
         ])
-    return rows
 
+    print(f"TOTAL FILAS GENERADAS SEGURIDAD SOCIAL: {len(rows)}")
+    print("=" * 80)
+
+    return rows
 
 def parse_parafiscales(
     section_text: str,
@@ -328,6 +395,8 @@ def parse_parafiscales(
     fecha_generacion: datetime,
 ) -> List[List]:
     rows = []
+    section_text = normalize_parafiscales_section_text(section_text)
+    
     for match in PARAF_PATTERN.findall(section_text):
         (
             periodo_pension, tipo_planilla,
@@ -445,7 +514,7 @@ def process_pdf(pdf_path: Path) -> Dict[str, List[List]]:
         "Novedades",
     )
 
-    novedades_table = tables[-1]
+    novedades_table = tables[-1] if tables else []
 
     data = {
         "Liquidaciones Pagadas": parse_liquidaciones(
