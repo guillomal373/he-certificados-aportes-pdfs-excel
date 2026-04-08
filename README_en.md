@@ -1,9 +1,7 @@
-> [!TIP]
-> Created by Guillermo Malagon on April 8, 2026.
-
 # README - Processing Contribution Certificates on macOS
 
-> **Created by Guillermo Malagon on April 8, 2026.**
+> [!TIP]
+> Created by Guillermo Malagon on April 8, 2026.
 
 This document explains how to run the `procesar_certificados_aportes.py` script on a MacBook to process multiple PDF files from a folder and generate a single consolidated Excel file.
 

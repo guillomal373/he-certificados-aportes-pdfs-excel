@@ -1,7 +1,7 @@
+# README - Procesamiento de Certificados de Aportes en macOS
+
 > [!TIP]
 > Creado por Guillermo Malagon Abril 8 de 2026.
-
-# README - Procesamiento de Certificados de Aportes en macOS
 
 Este documento explica cómo ejecutar el script `procesar_certificados_aportes.py` en un MacBook para procesar múltiples archivos PDF desde una carpeta y generar un único archivo Excel consolidado.
 
